@@ -443,7 +443,7 @@ namespace Glass.Mapper.Sc
 
 
 
-                if (IsInEditingMode)
+                if (standardOutput==null || IsInEditingMode)
                 {
                     if (field.Parameters.Count > 1)
                         throw new MapperException("To many parameters in linq expression {0}".Formatted(field.Body));
@@ -548,10 +548,7 @@ namespace Glass.Mapper.Sc
                 }
                 else
                 {
-                    if (standardOutput != null)
-                        firstPart = standardOutput.Compile().Invoke(model);
-                    else
-                        firstPart = (field.Compile().Invoke(model) ?? string.Empty).ToString();
+                    firstPart = standardOutput.Compile().Invoke(model);
                 }
             }
             catch (Exception ex)
