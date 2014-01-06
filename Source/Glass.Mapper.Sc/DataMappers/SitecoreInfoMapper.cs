@@ -132,8 +132,16 @@ namespace Glass.Mapper.Sc.DataMappers
                     return LinkManager.GetItemUrl(item, urlOptions);
                 case SitecoreInfoType.Version:
                     return item.Version.Number;
+                case SitecoreInfoType.HasVersion:
+                    return item.Versions.Count > 0;
                 case SitecoreInfoType.Language:
-                    return item.Language;  
+                    return item.Language;
+                case SitecoreInfoType.HasLock:
+                    return item.Locking.HasLock();
+                case SitecoreInfoType.Created:
+                    return item.Statistics.Created;
+                case SitecoreInfoType.Updated:
+                    return item.Statistics.Updated;
                 default:
                     throw new MapperException("SitecoreInfoType {0} not supported".Formatted(scConfig.Type));
             }

@@ -69,6 +69,22 @@ namespace Glass.Mapper.Sc.Configuration
         /// </summary>
         Version,
         /// <summary>
+        /// True if item has a version. The property type must be bool
+        /// </summary>
+        HasVersion,
+        /// <summary>
+        /// True if current user has a lock on the item
+        /// </summary>
+        HasLock,
+        /// <summary>
+        /// Gets the creation date of the item
+        /// </summary>
+        Created,
+        /// <summary>
+        /// Get the date of the latest update to the item
+        /// </summary>
+        Updated,
+        /// <summary>
         /// The item's Name. The property type must be System.String
         /// </summary>
         Name,
