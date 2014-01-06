@@ -123,8 +123,9 @@ namespace Glass.Mapper.Sc.Web.Mvc
         public static GlassEditFrame BeginEditFrame(this HtmlHelper htmlHelper, EditFrame editFrame)
         {
             var writter = new HtmlTextWriter(htmlHelper.ViewContext.Writer);
-            editFrame.RenderFirstPart(writter);
-            return new GlassEditFrame(editFrame);
+            var frame = new GlassEditFrame(editFrame, writter);
+            frame.RenderFirstPart();
+            return frame;
         }
     }
 }
