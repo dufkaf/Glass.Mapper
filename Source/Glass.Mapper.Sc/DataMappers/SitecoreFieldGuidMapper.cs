@@ -68,7 +68,11 @@ namespace Glass.Mapper.Sc.DataMappers
         {
             if (value is Guid)
             {
-                return ((Guid)value).ToString("B").ToUpper();
+                if (((Guid) value) == Guid.Empty)
+                {
+                    return String.Empty;
+                }
+                return ((Guid)value).ToString("B").ToUpper(); // should be same as Sitecore.Data.ID.ToString()
             }
             else throw new MapperException("The value is not of type System.Guid");
         }
