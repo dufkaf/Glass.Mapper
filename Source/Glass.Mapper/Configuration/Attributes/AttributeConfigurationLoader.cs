@@ -65,6 +65,13 @@ namespace Glass.Mapper.Configuration.Attributes
                 }
                 else
                 {
+                    //try // loading via simple Assembly.Load - this works for me too, not sure why Glass uses such complex way below
+                    //{
+                    //    return Assembly.Load(assemblyName);
+                    //}
+                    //catch
+                    //{
+                    //}
                     //try to find a dll or exe
                     //TODO: can we move this to config
                     var path = "./";
@@ -73,8 +80,12 @@ namespace Glass.Mapper.Configuration.Attributes
                     {
                         if (HttpContext.Current != null)
                         {
-                            path=   HttpContext.Current.Server.MapPath("/bin");
+                            path = HttpContext.Current.Server.MapPath("/bin");
                             path += "/";
+                        }
+                        else
+                        {
+                            path = HttpRuntime.AppDomainAppPath+@"bin\";
                         }
                     }
                     catch
