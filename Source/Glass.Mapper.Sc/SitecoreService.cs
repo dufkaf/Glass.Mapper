@@ -21,12 +21,17 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using Glass.Mapper.Pipelines.ConfigurationResolver.Tasks.MultiInterfaceResolver;
+using Glass.Mapper.Pipelines.ConfigurationResolver.Tasks.OnDemandResolver;
 using Glass.Mapper.Sc.Configuration;
 using Glass.Mapper.Sc.Dynamic;
 using Sitecore.Common;
 using Sitecore.Data;
+using Sitecore.Data.Events;
 using Sitecore.Data.Items;
+using Sitecore.Data.Managers;
 using Sitecore.Globalization;
+using Version = Sitecore.Data.Version;
 
 namespace Glass.Mapper.Sc
 {
@@ -37,6 +42,7 @@ namespace Glass.Mapper.Sc
     /// </summary>
     public class SitecoreService : AbstractService, ISitecoreService
     {
+        public Config Config { get; set; }
 
         /// <summary>
         /// Gets the database.
@@ -88,6 +94,13 @@ namespace Glass.Mapper.Sc
             Database = database;
         }
 
+        public override void Initiate(IDependencyResolver resolver)
+        {
+            Config = resolver.Resolve<Config>();
+            base.Initiate(resolver);
+        }
+
+
         #region AddVersion
 
         /// <summary>
@@ -101,7 +114,7 @@ namespace Glass.Mapper.Sc
         public T AddVersion<T>(T target) where T : class
         {
             //TODO: ME - this may not work with a proxy
-            var config = GlassContext.GetTypeConfiguration(target) as SitecoreTypeConfiguration;
+            var config = GlassContext.GetTypeConfiguration<SitecoreTypeConfiguration>(target) ;
 
             if (config == null)
                 throw new NullReferenceException("Can not add version, could not find configuration for {0}".Formatted(typeof(T).FullName));
@@ -152,7 +165,8 @@ namespace Glass.Mapper.Sc
             SitecoreTypeConfiguration newType;
             try
             {
-                newType = GlassContext.GetTypeConfiguration(newItem) as SitecoreTypeConfiguration;
+              newType = GlassContext.GetTypeConfiguration<SitecoreTypeConfiguration>(newItem, checkBase:false);
+               
             }
             catch (Exception ex)
             {
@@ -163,17 +177,17 @@ namespace Glass.Mapper.Sc
             SitecoreTypeConfiguration parentType;
             try
             {
-                parentType = GlassContext.GetTypeConfiguration(parent) as SitecoreTypeConfiguration;
+                parentType = GlassContext.GetTypeConfiguration<SitecoreTypeConfiguration>(parent);
             }
             catch (Exception ex)
             {
                 throw new MapperException("Failed to find configuration for parent item type {0}".Formatted(typeof(TK).FullName), ex);
             }
 
-            Item pItem = parentType.ResolveItem(parent, Database);
+            Item parentItem = parentType.ResolveItem(parent, Database);
 
             
-            if (pItem == null)
+            if (parentItem == null)
                 throw new MapperException("Could not find parent item");
 
 
@@ -199,23 +213,27 @@ namespace Glass.Mapper.Sc
                
             ID templateId = newType.TemplateId;
             ID branchId = newType.BranchId;
+            ID itemId = newType.GetId(newItem);
             Language language = newType.GetLanguage(newItem);
 
             //check that parent item language is equal to new item language, if not change parent to other language
-            if (language != null && pItem.Language != language)
+            if (language != null && parentItem.Language != language)
             {
-                pItem = Database.GetItem(pItem.ID, language);
+                parentItem = Database.GetItem(parentItem.ID, language);
             }
 
             Item item;
-
-            if (!ID.IsNullOrEmpty(branchId))
+            if (!ID.IsNullOrEmpty(itemId) && ID.IsNullOrEmpty(branchId) && !ID.IsNullOrEmpty(templateId))
             {
-                item = pItem.Add(name, new BranchId(branchId));
+                item = ItemManager.AddFromTemplate(name, templateId, parentItem, itemId);
+            }
+            else if (!ID.IsNullOrEmpty(branchId))
+            {
+                item = parentItem.Add(name, new BranchId(branchId));
             }
             else if (!ID.IsNullOrEmpty(templateId))
             {
-                item = pItem.Add(name, new TemplateID(templateId));
+                item = parentItem.Add(name, new TemplateID(templateId));
             }
             else
             {
@@ -241,6 +259,76 @@ namespace Glass.Mapper.Sc
             return newItem;
         }
 
+        public T Create<T, TK>(TK parent, string newName, Language language = null, bool updateStatistics = true, bool silent = false)
+            where T : class
+            where TK : class
+        {
+
+            SitecoreTypeConfiguration newType;
+            try
+            {
+                newType = GlassContext.GetTypeConfiguration<SitecoreTypeConfiguration>(typeof(T)) ;
+            }
+            catch (Exception ex)
+            {
+                throw new MapperException("Failed to find configuration for new item type {0}".Formatted(typeof(T).FullName), ex);
+            }
+
+
+            SitecoreTypeConfiguration parentType;
+            try
+            {
+                parentType = GlassContext.GetTypeConfiguration<SitecoreTypeConfiguration>(parent);
+            }
+            catch (Exception ex)
+            {
+                throw new MapperException("Failed to find configuration for parent item type {0}".Formatted(typeof(TK).FullName), ex);
+            }
+
+            Item pItem = parentType.ResolveItem(parent, Database);
+
+
+            if (pItem == null)
+                throw new MapperException("Could not find parent item");
+
+            
+            if (newName.IsNullOrEmpty())
+                throw new MapperException("New class has no name");
+
+            ID templateId = newType.TemplateId;
+            ID branchId = newType.BranchId;
+            
+
+            //check that parent item language is equal to new item language, if not change parent to other language
+            if (language != null && pItem.Language != language)
+            {
+                pItem = Database.GetItem(pItem.ID, language);
+            }
+
+            Item item;
+
+
+
+
+            if (!ID.IsNullOrEmpty(branchId))
+            {
+                item = pItem.Add(newName, new BranchId(branchId));
+            }
+            else if (!ID.IsNullOrEmpty(templateId))
+            {
+                item = pItem.Add(newName, new TemplateID(templateId));
+            }
+            else
+            {
+                throw new MapperException("Type {0} does not have a Template ID or Branch ID".Formatted(typeof(T).FullName));
+            }
+
+            if (item == null) throw new MapperException("Failed to create item");
+
+            
+            return this.CreateType<T>(item, false, false);
+        }
+
 
 
         #endregion
@@ -257,7 +345,7 @@ namespace Glass.Mapper.Sc
         /// <returns>The item as the specified type</returns>
         public T CreateType<T>(Item item, bool isLazy = false, bool inferType = false) where T : class
         {
-            return (T)CreateType(typeof(T), item, isLazy, inferType);
+            return (T)CreateType(typeof(T), item, isLazy, inferType, null);
         }
 
         /// <summary>
@@ -272,7 +360,7 @@ namespace Glass.Mapper.Sc
         /// <returns>The item as the specified type</returns>
         public T CreateType<T, TK>(Item item, TK param1, bool isLazy = false, bool inferType = false)
         {
-            return (T)CreateType(typeof(T), item, isLazy, inferType, param1);
+            return (T)CreateType(typeof(T), item, isLazy, inferType, null, param1);
 
         }
 
@@ -290,7 +378,7 @@ namespace Glass.Mapper.Sc
         /// <returns>The item as the specified type</returns>
         public T CreateType<T, TK, TL>(Item item, TK param1, TL param2, bool isLazy = false, bool inferType = false)
         {
-            return (T)CreateType(typeof(T), item, isLazy, inferType, param1, param2);
+            return (T)CreateType(typeof(T), item, isLazy, inferType, null, param1, param2);
         }
 
         /// <summary>
@@ -309,7 +397,7 @@ namespace Glass.Mapper.Sc
         /// <returns>The item as the specified type</returns>
         public T CreateType<T, TK, TL, TM>(Item item, TK param1, TL param2, TM param3, bool isLazy = false, bool inferType = false)
         {
-            return (T)CreateType(typeof(T), item, isLazy, inferType, param1, param2, param3);
+            return (T)CreateType(typeof(T), item, isLazy, inferType, null, param1, param2, param3);
         }
 
         /// <summary>
@@ -330,23 +418,23 @@ namespace Glass.Mapper.Sc
         /// <returns>The item as the specified type</returns>
         public T CreateType<T, TK, TL, TM, TN>(Item item, TK param1, TL param2, TM param3, TN param4, bool isLazy = false, bool inferType = false)
         {
-            return (T)CreateType(typeof(T), item, isLazy, inferType, param1, param2, param3, param4);
+            return (T)CreateType(typeof(T), item, isLazy, inferType, null, param1, param2, param3, param4);
         }
 
 
-        /// <summary>
-        /// Creates the type.
-        /// </summary>
-        /// <param name="type">The type.</param>
-        /// <param name="item">The item.</param>
-        /// <param name="isLazy">if set to <c>true</c> [is lazy].</param>
-        /// <param name="inferType">if set to <c>true</c> [infer type].</param>
-        /// <param name="constructorParameters">Parameters to pass to the constructor of the new class. Must be in the order specified on the consturctor.</param>
-        /// <returns>System.Object.</returns>
-        /// <exception cref="System.NotSupportedException">Maximum number of constructor parameters is 4</exception>
-        public object CreateType(Type type, Item item, bool isLazy, bool inferType, params object[] constructorParameters)
+        private bool DoVersionCheck()
         {
-            if (item == null || (item.Versions.Count == 0 && Switcher<VersionCountState>.CurrentValue != VersionCountState.Disabled)) return null;
+            if (Config != null && Config.ForceItemInPageEditor && GlassHtml.IsInEditingMode)
+                return false;
+
+
+            return Switcher<VersionCountState>.CurrentValue != VersionCountState.Disabled;
+
+        }
+
+        public object CreateType(Type type, Item item, bool isLazy, bool inferType, Dictionary<string, object> parameters, params object[] constructorParameters)
+        {
+            if (item == null || (item.Versions.Count == 0 && DoVersionCheck())) return null;
 
 
             if (constructorParameters != null && constructorParameters.Length > 4)
@@ -359,6 +447,8 @@ namespace Glass.Mapper.Sc
             creationContext.Item = item;
             creationContext.InferType = inferType;
             creationContext.IsLazy = isLazy;
+            creationContext.Parameters = parameters ?? new Dictionary<string, object>();
+
             var obj = InstantiateObject(creationContext);
 
             return obj;
@@ -394,7 +484,7 @@ namespace Glass.Mapper.Sc
         public void Delete<T>(T item) where T : class
         {
 
-            var type = GlassContext.GetTypeConfiguration(item) as SitecoreTypeConfiguration;
+            var type = GlassContext.GetTypeConfiguration<SitecoreTypeConfiguration>(item);
 
             Item scItem = type.ResolveItem(item, Database);
 
@@ -455,7 +545,7 @@ namespace Glass.Mapper.Sc
         public T GetItem<T>(string path, bool isLazy = false, bool inferType = false) where T : class
         {
             var item = Database.GetItem(path);
-            return CreateType(typeof(T), item, isLazy, inferType) as T;
+            return CreateType(typeof(T), item, isLazy, inferType, null) as T;
         }
 
         /// <summary>
@@ -762,7 +852,7 @@ namespace Glass.Mapper.Sc
         public T GetItem<T>(Guid id, bool isLazy = false, bool inferType = false) where T : class
         {
             var item = Database.GetItem(new ID(id));
-            return CreateType(typeof(T), item, isLazy, inferType) as T;
+            return CreateType(typeof(T), item, isLazy, inferType, null) as T;
         }
 
         /// <summary>
@@ -1049,7 +1139,177 @@ namespace Glass.Mapper.Sc
             Item item = Database.GetItem(new ID(id), language, version);
             return CreateType<T, TK, TL, TM, TN>(item, param1, param2, param3, param4, isLazy, inferType);
         }
+        
+        #endregion
 
+
+        #region  GetItemWithInterfaces
+
+        public T GetItemWithInterfaces<T, TK, TL, TM, TN>(Guid id, Language language = null, Version version = null, bool isLazy = false,
+          bool inferType = false) where T : class where TK: class where TL:class where TM: class where TN: class
+        {
+            language = language ?? Language.Current;
+            version = version ?? Version.Latest;
+
+            var parameters = new Dictionary<string, object>();
+            parameters[MultiInterfaceResolverTask.MultiInterfaceTypesKey] = 
+                new[] {typeof (TK), typeof (TL), typeof (TM), typeof (TN)};
+
+            Item item = Database.GetItem(new ID(id), language, version);
+            return (T) CreateType(
+                typeof (T), 
+                item,
+                isLazy,
+                inferType,
+                parameters);
+        }
+
+        public T GetItemWithInterfaces<T, TK, TL, TM>(Guid id, Language language = null, Version version = null, bool isLazy = false,
+                                                  bool inferType = false) where T : class where TK : class where TL : class where TM : class
+        {
+            language = language ?? Language.Current;
+            version = version ?? Version.Latest;
+
+            var parameters = new Dictionary<string, object>();
+            parameters[MultiInterfaceResolverTask.MultiInterfaceTypesKey] =
+                new[] { typeof(TK), typeof(TL), typeof(TM) };
+
+            Item item = Database.GetItem(new ID(id), language, version);
+            return (T)CreateType(
+                 typeof(T),// typeof(TK), typeof(TL), typeof(TM)},
+                item,
+                isLazy,
+                inferType,
+                parameters);
+        }
+
+        public T GetItemWithInterfaces<T, TK, TL>(Guid id, Language language = null, Version version = null, bool isLazy = false,
+                                              bool inferType = false) where T : class where TK : class where TL : class
+        {
+            language = language ?? Language.Current;
+            version = version ?? Version.Latest;
+
+            var parameters = new Dictionary<string, object>();
+            parameters[MultiInterfaceResolverTask.MultiInterfaceTypesKey] =
+                new[] { typeof(TK), typeof(TL) };
+
+            Item item = Database.GetItem(new ID(id), language, version);
+            return (T)CreateType(
+                 typeof(T),// typeof(TK), typeof(TL) },
+                item,
+                isLazy,
+                inferType,
+                parameters);
+        }
+
+        public T GetItemWithInterfaces<T, TK>(Guid id, Language language = null, Version version = null, bool isLazy = false,
+                                          bool inferType = false) where T : class where TK : class
+        {
+            language = language ?? Language.Current;
+            version = version ?? Version.Latest;
+
+            var parameters = new Dictionary<string, object>();
+            parameters[MultiInterfaceResolverTask.MultiInterfaceTypesKey] =
+                new[] { typeof(TK) };
+
+            Item item = Database.GetItem(new ID(id), language, version);
+            return (T)CreateType(
+                typeof(T),// typeof(TK) },
+                item,
+                isLazy,
+                inferType,
+                parameters);
+        }
+
+        public T GetItemWithInterfaces<T, TK, TL, TM, TN>(string path, Language language = null, Version version = null, bool isLazy = false,
+  bool inferType = false)
+            where T : class
+            where TK : class
+            where TL : class
+            where TM : class
+            where TN : class
+        {
+            language = language ?? Language.Current;
+            version = version ?? Version.Latest;
+
+            var parameters = new Dictionary<string, object>();
+            parameters[MultiInterfaceResolverTask.MultiInterfaceTypesKey] =
+                new[] { typeof(TK), typeof(TL), typeof(TM), typeof(TN) };
+
+            Item item = Database.GetItem(path, language, version);
+            return (T)CreateType(
+                typeof(T), // typeof(TK), typeof(TL), typeof(TM), typeof(TN) },
+                item,
+                isLazy,
+                inferType,
+                parameters);
+        }
+
+        public T GetItemWithInterfaces<T, TK, TL, TM>(string path, Language language = null, Version version = null, bool isLazy = false,
+                                                  bool inferType = false)
+            where T : class
+            where TK : class
+            where TL : class
+            where TM : class
+        {
+            language = language ?? Language.Current;
+            version = version ?? Version.Latest;
+
+            var parameters = new Dictionary<string, object>();
+            parameters[MultiInterfaceResolverTask.MultiInterfaceTypesKey] =
+                new[] { typeof(TK), typeof(TL), typeof(TM) };
+
+            Item item = Database.GetItem(path, language, version);
+            return (T)CreateType(
+                 typeof(T),// typeof(TK), typeof(TL), typeof(TM) },
+                item,
+                isLazy,
+                inferType,
+                parameters);
+        }
+
+        public T GetItemWithInterfaces<T, TK, TL>(string path, Language language = null, Version version = null, bool isLazy = false,
+                                              bool inferType = false)
+            where T : class
+            where TK : class
+            where TL : class
+        {
+            language = language ?? Language.Current;
+            version = version ?? Version.Latest;
+
+            var parameters = new Dictionary<string, object>();
+            parameters[MultiInterfaceResolverTask.MultiInterfaceTypesKey] =
+                new[] { typeof(TK), typeof(TL) };
+
+            Item item = Database.GetItem(path, language, version);
+            return (T)CreateType(
+                 typeof(T), //typeof(TK), typeof(TL) },
+                item,
+                isLazy,
+                inferType,
+                parameters);
+        }
+
+        public T GetItemWithInterfaces<T, TK>(string path, Language language = null, Version version = null, bool isLazy = false,
+                                          bool inferType = false)
+            where T : class
+            where TK : class
+        {
+            language = language ?? Language.Current;
+            version = version ?? Version.Latest;
+
+            var parameters = new Dictionary<string, object>();
+            parameters[MultiInterfaceResolverTask.MultiInterfaceTypesKey] =
+                new[] { typeof(TK)};
+
+            Item item = Database.GetItem(path, language, version);
+            return (T)CreateType(
+                 typeof(T), //typeof(TK) },
+                item,
+                isLazy,
+                inferType,
+                parameters);
+        }
 
         #endregion
 
@@ -1064,8 +1324,8 @@ namespace Glass.Mapper.Sc
         /// <param name="newParent">The new parent.</param>
         public void Move<T, TK>(T item, TK newParent)
         {
-            var itemType = GlassContext.GetTypeConfiguration(item) as SitecoreTypeConfiguration;
-            var parentType = GlassContext.GetTypeConfiguration(newParent) as SitecoreTypeConfiguration;
+            var itemType = GlassContext.GetTypeConfiguration<SitecoreTypeConfiguration>(item);
+            var parentType = GlassContext.GetTypeConfiguration<SitecoreTypeConfiguration>(newParent);
 
             Item scItem = itemType.ResolveItem(item, Database);
             Item scNewParent = parentType.ResolveItem(newParent, Database);
@@ -1147,7 +1407,7 @@ namespace Glass.Mapper.Sc
             //  SitecoreTypeContext context = new SitecoreTypeContext();
 
             //TODO: ME - this may not work with a proxy
-            var config = GlassContext.GetTypeConfiguration(target) as SitecoreTypeConfiguration;
+            var config = GlassContext.GetTypeConfiguration<SitecoreTypeConfiguration>(target);
 
             if (config == null)
                 throw new NullReferenceException("Can not save class, could not find configuration for {0}".Formatted(typeof(T).FullName));
@@ -1174,7 +1434,7 @@ namespace Glass.Mapper.Sc
         /// <param name="item">The item.</param>
         public void WriteToItem<T>(T target, Item item, bool updateStatistics = true, bool silent = false)
         {
-            var config = GlassContext.GetTypeConfiguration(target) as SitecoreTypeConfiguration;
+            var config = GlassContext.GetTypeConfiguration<SitecoreTypeConfiguration>(target);
 
             SitecoreTypeSavingContext savingContext = new SitecoreTypeSavingContext();
             savingContext.Config = config;
@@ -1191,6 +1451,53 @@ namespace Glass.Mapper.Sc
             item.Editing.EndEdit(updateStatistics, silent);
         }
 
+
+        #endregion
+
+        #region Map
+
+        public void Map<T>(T target)
+        {
+            var config = GlassContext.GetTypeConfiguration<SitecoreTypeConfiguration>(target);
+
+            if(config == null)
+                throw new MapperException("No configuration for type {0}. Load configuration using Attribute or Fluent configuration.".Formatted(typeof(T).Name));
+
+            var item = config.ResolveItem(target, Database);
+
+            if (item == null)
+                return;
+
+            SitecoreTypeCreationContext creationContext = new SitecoreTypeCreationContext();
+            creationContext.SitecoreService = this;
+            creationContext.RequestedType = typeof (T);
+            creationContext.ConstructorParameters = new object[0];
+            creationContext.Item = item;
+            creationContext.InferType = false;
+            creationContext.IsLazy = false;
+            creationContext.Parameters = new Dictionary<string, object>();
+
+            config.MapPropertiesToObject(target, this,creationContext);
+        }
+
+        #endregion
+
+        #region ResolveItem
+
+        public Item ResolveItem(object target)
+        {
+            var config = GlassContext.GetTypeConfiguration<SitecoreTypeConfiguration>(target);
+            
+            if (config == null)
+            {
+                return null;
+            }
+
+            var item = config.ResolveItem(target, Database);
+
+            return item;
+
+        }
 
         #endregion
 
@@ -1216,6 +1523,8 @@ namespace Glass.Mapper.Sc
             var scContext = creationContext as SitecoreTypeSavingContext;
             return new SitecoreDataMappingContext(scContext.Object, scContext.Item, this);
         }
+
+
 
     } 
 }
